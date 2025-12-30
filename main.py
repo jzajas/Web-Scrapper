@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 import time
 import os
 from dotenv import load_dotenv
+import re
+import json
 
 
 load_dotenv()
@@ -66,31 +68,70 @@ def save_product(name: str, price, url: str) -> None:
     PRODUCTS[name][url] = price
 
 
-card_name = CARD_NAME.strip().replace(" ", "+")
-available_products = []
-current_page = 1
+def extract_names(filename: str) -> list[str]:
+    names = []
 
-url = get_url(card_name, current_page)
-html = urlopen(url).read().decode("utf-8")
-max_pages = get_max_page(html)
+    with open(filename, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
 
-while current_page <= max_pages:
-    print(f"CURRENT PAGE: {current_page}")
-    time.sleep(REQUEST_DELAY)
+            line = re.sub(r"^\d+\s+", "", line)
+            line = line.split(" / ")[0]
+            line = re.sub(r"\s*\(.*$", "", line)
+            line = re.sub(r"\s*\*.*\*$", "", line)
+
+            names.append(line)
+
+    return names
+
+
+def save_products_to_bookmarks(filename="bookmarks.html"):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n")
+        f.write("<META HTTP-EQUIV='Content-Type' CONTENT='text/html; charset=UTF-8'>\n")
+        f.write("<TITLE>Products</TITLE>\n<H1>Products</H1>\n<DL><p>\n")
+
+        for name, entries in PRODUCTS.items():
+            f.write(f"<DT><H3>{name}</H3>\n<DL><p>\n")
+            for url, price in entries.items():
+                f.write(f"<DT><A HREF='{url}'>{price}</A>\n")
+            f.write("</DL><p>\n")
+
+        f.write("</DL><p>")
+
+
+
+cards = extract_names("deck.txt")
+for card in cards:
+    card_name = card.strip().replace(" ", "+")
+    available_products = []
+    current_page = 1
 
     url = get_url(card_name, current_page)
     html = urlopen(url).read().decode("utf-8")
+    max_pages = get_max_page(html)
 
-    products = fetch_products(html)
-    products = [p for p in products if "soldout" not in p.get("class", [])]
+    while current_page <= max_pages:
+        print(f"CURRENT PAGE: {current_page} for {card}")
+        time.sleep(REQUEST_DELAY)
 
-    for product in products:
-        extracted = extract_product_data(product)
-        if extracted:
-            name, price, url = extracted
-            save_product(name, price, url)
+        url = get_url(card_name, current_page)
+        html = urlopen(url).read().decode("utf-8")
 
-    current_page += 1
+        products = fetch_products(html)
+        products = [p for p in products if "soldout" not in p.get("class", [])]
+
+        for product in products:
+            extracted = extract_product_data(product)
+            if extracted:
+                name, price, url = extracted
+                if str(name).startswith(card):
+                    print("FOUND STH!")
+                    save_product(name, price, url)
+
+        current_page += 1
 
 
-print(PRODUCTS)
+save_products_to_bookmarks()

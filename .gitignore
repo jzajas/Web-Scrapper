@@ -12,3 +12,8 @@ venv/
 .DS_Store
 /.env
 .env
+
+deck.txt
+products.jsonl
+products.json
+bookmarks.html
