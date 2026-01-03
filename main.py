@@ -1,17 +1,46 @@
-from urllib.request import urlopen
+from dotenv import load_dotenv
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 from bs4 import BeautifulSoup
 import time
 import os
-from dotenv import load_dotenv
 import re
-import json
 
 
 load_dotenv()
 PRODUCTS = {}
 BASE_SEARCH_URL = os.getenv("BASE_SEARCH_URL")
-CARD_NAME = os.getenv("CARD_NAME")
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY"))
+BASIC_LANDS = {"Plains", "Swamp", "Mountain", "Forest", "Island"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def fetch_html(url, retries=5, delay=5):
+    for attempt in range(1, retries + 1):
+        try:
+            req = Request(url, headers=HEADERS)
+            with urlopen(req, timeout=30) as response:
+                return response.read().decode("utf-8")
+
+        except HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504):
+                print(f"[Retry {attempt}/{retries}] HTTP {e.code} → sleeping {delay}s")
+                time.sleep(delay)
+            else:
+                raise
+
+        except URLError as e:
+            print(f"[Network error] {e} → sleeping {delay}s")
+            time.sleep(delay)
+
+    raise RuntimeError(f"Failed to fetch {url} after {retries} retries")
 
 
 def get_max_page(html: str) -> int:
@@ -102,36 +131,58 @@ def save_products_to_bookmarks(filename="bookmarks.html"):
         f.write("</DL><p>")
 
 
+def scrape_card(original_name: str) -> None:
+    search_card_name = re.sub(" ", "+", original_name)
+    search_card_name = search_card_name.strip()
 
-cards = extract_names("deck.txt")
-for card in cards:
-    card_name = card.strip().replace(" ", "+")
-    available_products = []
-    current_page = 1
+    if search_card_name in BASIC_LANDS:
+        return
 
-    url = get_url(card_name, current_page)
-    html = urlopen(url).read().decode("utf-8")
-    max_pages = get_max_page(html)
+    print(f"\n=== SCRAPING: {search_card_name} ===")
 
-    while current_page <= max_pages:
-        print(f"CURRENT PAGE: {current_page} for {card}")
+    try:
+        first_url = get_url(search_card_name, 1)
+        first_html = fetch_html(first_url)
+        max_pages = get_max_page(first_html)
+    except RuntimeError:
+        print(f"[SKIP] Failed initial request for {search_card_name}")
+        return
+
+    for page in range(1, max_pages + 1):
+        print(f"Page {page}/{max_pages}")
         time.sleep(REQUEST_DELAY)
 
-        url = get_url(card_name, current_page)
-        html = urlopen(url).read().decode("utf-8")
+        try:
+            html = first_html if page == 1 else fetch_html(get_url(search_card_name, page))
+        except RuntimeError:
+            print(f"[SKIP PAGE] {search_card_name} page {page}")
+            continue
 
         products = fetch_products(html)
-        products = [p for p in products if "soldout" not in p.get("class", [])]
 
         for product in products:
+            if "soldout" in product.get("class", []):
+                continue
+
             extracted = extract_product_data(product)
-            if extracted:
-                name, price, url = extracted
-                if str(name).startswith(card):
-                    print("FOUND STH!")
-                    save_product(name, price, url)
+            if not extracted:
+                continue
 
-        current_page += 1
+            name, price, url = extracted
+
+            if name.startswith(original_name):
+                print("saved product")
+                save_product(name, price, url)
 
 
-save_products_to_bookmarks()
+def scrape_deck(deck_file: str) -> None:
+    cards = extract_names(deck_file)
+
+    for card in cards:
+        scrape_card(card)
+
+    save_products_to_bookmarks()
+
+
+if __name__ == "__main__":
+    scrape_deck("deck.txt")
